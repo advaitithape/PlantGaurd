@@ -6,15 +6,12 @@ import os
 import time
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # Metrics (safe no-op stubs if prometheus is not available)
 from agents.metrics import CLASSIFICATION_COUNT, RAG_CALL_COUNT, set_followups_pending
 
 from agents.tools import classify_leaf_tool
-from agents.rag_agent import RAGAgent
-from agents.followup_agent import FollowUpAgent
-from agents.memory import MemoryBank
 
 # Optional message bus (best-effort)
 try:
@@ -22,19 +19,58 @@ try:
 except Exception:
     message_bus = None
 
-KB_PATH = os.getenv("KB_CSV", "data/kb.csv")
-RAG_PROVIDER = os.getenv("LLM_PROVIDER", "mock")
-RAG_MODEL = os.getenv("OPENAI_MODEL", None)
+# --- Lazy singletons: do NOT construct heavy objects at import time ---
+_RAG_INSTANCE = None
+_MEM_INSTANCE = None
+_FOLLOW_INSTANCE = None
 
-# create components (lazy init of rag is OK but we keep singletons)
-try:
-    rag = RAGAgent(kb_csv=KB_PATH, llm_provider=RAG_PROVIDER, llm_model=RAG_MODEL, topk=3)
-except Exception as e:
-    print("Warning: failed to initialize RAGAgent:", e)
-    rag = None
 
-mem = MemoryBank("data/memory_bank.json")
-follow = FollowUpAgent(persist_path="data/followups.json", memory_bank=mem)
+def get_rag():
+    """
+    Lazily create and return RAGAgent instance.
+    """
+    global _RAG_INSTANCE
+    if _RAG_INSTANCE is None:
+        try:
+            from agents.rag_agent import RAGAgent  # local import to avoid heavy init at import time
+            KB_PATH = os.getenv("KB_CSV", "data/kb.csv")
+            RAG_PROVIDER = os.getenv("LLM_PROVIDER", "mock")
+            RAG_MODEL = os.getenv("OPENAI_MODEL", None)
+            _RAG_INSTANCE = RAGAgent(kb_csv=KB_PATH, llm_provider=RAG_PROVIDER, llm_model=RAG_MODEL, topk=3)
+        except Exception as e:
+            print("Warning: failed to initialize RAGAgent:", e)
+            _RAG_INSTANCE = None
+    return _RAG_INSTANCE
+
+
+def get_mem():
+    """
+    Lazily create and return MemoryBank instance.
+    """
+    global _MEM_INSTANCE
+    if _MEM_INSTANCE is None:
+        try:
+            from agents.memory import MemoryBank
+            _MEM_INSTANCE = MemoryBank("data/memory_bank.json")
+        except Exception as e:
+            print("Warning: failed to initialize MemoryBank:", e)
+            _MEM_INSTANCE = None
+    return _MEM_INSTANCE
+
+
+def get_follow():
+    """
+    Lazily create and return FollowUpAgent instance (wired to MemoryBank).
+    """
+    global _FOLLOW_INSTANCE
+    if _FOLLOW_INSTANCE is None:
+        try:
+            from agents.followup_agent import FollowUpAgent
+            _FOLLOW_INSTANCE = FollowUpAgent(persist_path="data/followups.json", memory_bank=get_mem())
+        except Exception as e:
+            print("Warning: failed to initialize FollowUpAgent:", e)
+            _FOLLOW_INSTANCE = None
+    return _FOLLOW_INSTANCE
 
 
 def _safe_serialize(obj: Any) -> Any:
@@ -67,7 +103,7 @@ def run_pipeline(
     # ------------- classification -------------
     res = classify_leaf_tool(image_path)
     if res.get("error"):
-        return {"error": res["error"]}
+        return {"error": res["error"], "classification": _safe_serialize(res)}
 
     # increment classification metric (best-effort)
     try:
@@ -82,7 +118,7 @@ def run_pipeline(
         # publish event that a non-leaf was received (best-effort)
         try:
             if message_bus is not None:
-                message_bus.publish("classification", {"user_id": user_id, "image": image_path, "is_leaf": False, "raw": res})
+                message_bus.publish("classification", {"user_id": user_id, "image": image_path, "is_leaf": False, "raw": _safe_serialize(res)})
         except Exception:
             pass
         return {"message": "Not a leaf image. Request better photo.", "classification": _safe_serialize(res)}
@@ -102,8 +138,9 @@ def run_pipeline(
 
     # ------------- RAG call (best-effort) -------------
     rag_out = None
-    rag_provider = RAG_PROVIDER or "mock"
+    rag_provider = os.getenv("LLM_PROVIDER", "mock")
     try:
+        rag = get_rag()
         if rag is None:
             raise RuntimeError("RAGAgent is not initialized")
         rag_out = rag.answer_for_label(label, user_question="Provide a short farmer-friendly reply and instruct next steps.")
@@ -129,13 +166,15 @@ def run_pipeline(
 
     # Persist memory (classification + rag parsed if present)
     try:
-        memory_payload = {
-            "image": str(image_path),
-            "label": label,
-            "prob": prob,
-            "rag_parsed": _safe_serialize(rag_out.get("parsed") if isinstance(rag_out, dict) else None),
-        }
-        mem.add_memory(user_id, {"ts": time.time(), "type": "classification", "payload": memory_payload})
+        mem = get_mem()
+        if mem is not None:
+            memory_payload = {
+                "image": str(image_path),
+                "label": label,
+                "prob": prob,
+                "rag_parsed": _safe_serialize(rag_out.get("parsed") if isinstance(rag_out, dict) else None),
+            }
+            mem.add_memory(user_id, {"ts": time.time(), "type": "classification", "payload": memory_payload})
     except Exception as e:
         print("Warning: failed to persist memory:", e)
 
@@ -151,6 +190,9 @@ def run_pipeline(
     fu = None
     if schedule_followup:
         try:
+            follow = get_follow()
+            if follow is None:
+                raise RuntimeError("FollowUpAgent not initialized")
             fu = follow.create_followup(
                 user_id=user_id,
                 image_path=str(image_path),
