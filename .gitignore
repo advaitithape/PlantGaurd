@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# VS Code
+.vscode/
+
+# Model & data
+models/*.pt
+data/*.json
+data/*.idx
+data/*.npy
+data/logs/*
+data/followups.json
+data/memory_bank.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env files
+.env

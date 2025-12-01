@@ -1,0 +1,13 @@
+flask
+requests
+torch
+timm
+numpy
+opencv-python-headless
+pillow
+pandas
+python-dotenv
+sentence-transformers
+faiss-cpu
+prometheus-client
+gunicorn
