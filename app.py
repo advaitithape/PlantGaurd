@@ -105,39 +105,42 @@ def health():
 @app.route("/classify", methods=["POST"])
 def classify():
     """
-    POST /classify
-    Multipart form:
-        image: file
-        user_id: optional
-        followup_days: optional float
+    Accepts multipart/form-data with 'image' file and optional 'user_id'.
+    Returns the orchestrator result (classification, rag, followup).
     """
     if "image" not in request.files:
-        return jsonify({"error": "missing 'image' in form-data"}), 400
+        return jsonify({"error":"missing 'image' file"}), 400
 
-    img = request.files["image"]
-    user_id = request.form.get("user_id", "web_user")
-
-    tmp_dir = Path("/tmp")
+    imgfile = request.files["image"]
+    user_id = request.form.get("user_id", os.getenv("DEFAULT_USER", "web_user"))
+    # Save temporary file
+    tmp_dir = Path(os.getenv("TMP_DIR", "/tmp"))
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    tmp_path = tmp_dir / img.filename
-    img.save(tmp_path)
+    tmp_path = tmp_dir / imgfile.filename
+    imgfile.save(tmp_path)
 
+    # run pipeline (import orchestrator lazily)
     try:
-        delay = float(request.form.get("followup_days", "0.5"))
-    except:
-        delay = 0.5
-
-    try:
-        result = run_pipeline(str(tmp_path), user_id, create_followup_days=delay, schedule_followup=True)
+        from agents.orchestrator import run_pipeline  # lazy import to avoid heavy init at app import
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
+        return jsonify({"error": f"Failed to import orchestrator: {e}"}), 500
+
+    try:
+        delay_days = float(request.form.get("followup_days", os.getenv("DEFAULT_FOLLOWUP_DAYS", "0.5")))
+    except Exception:
+        delay_days = 0.5
+
+    try:
+        out = run_pipeline(str(tmp_path), user_id, create_followup_days=delay_days, schedule_followup=True)
+        # remove temp file
         try:
             tmp_path.unlink()
-        except:
+        except Exception:
             pass
+        return jsonify(out)
+    except Exception as e:
+        return jsonify({"error": str(e), "traceback": repr(e)}), 500
 
-    return jsonify(result)
 
 
 @app.route("/followup/trigger", methods=["POST"])
