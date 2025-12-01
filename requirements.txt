@@ -21,3 +21,4 @@ Pillow
 
 # --- Other utilities ---
 prometheus-client
+opencv-python-headless
