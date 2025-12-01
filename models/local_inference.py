@@ -7,7 +7,7 @@ from typing import Union
 import threading
 
 # Import functions from your infer.py (kept the same)
-import infer  # assumes infer.py is importable from project root
+from . import infer  # assumes infer.py is importable from project root
 
 class LocalModelWrapper:
     """
