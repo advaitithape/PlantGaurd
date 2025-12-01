@@ -1,13 +1,26 @@
-flask
-requests
-torch
-timm
-numpy
-opencv-python-headless
-pillow
-pandas
-python-dotenv
-sentence-transformers
-faiss-cpu
-prometheus-client
-gunicorn
+# --- Core API ---
+Flask==3.0.2
+gunicorn==23.0.0
+python-dotenv==1.0.1
+requests==2.31.0
+
+# --- RAG / Knowledge Base Retrieval ---
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.4.1.post1
+sentence-transformers==2.7.0
+faiss-cpu==1.7.4
+
+# --- LLM Clients (RAGAgent supports OpenAI + mock) ---
+openai>=1.0.0
+
+# --- ML Model Inference ---
+torch==2.2.2
+torchvision==0.17.2
+Pillow==10.2.0
+
+# --- Other utilities ---
+prometheus-client==0.20.0
+
+# --- If using message bus or additional logs (safe to include) ---
+loguru==0.7.2
